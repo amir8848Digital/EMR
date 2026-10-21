@@ -1,0 +1,104 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# The Frappe bench on its own — everything a dev needs to work on the bench
+# apps, without the other ten EMR apps.
+#
+#   docker compose -f docker/bench-image/docker-compose.yml up -d
+#   docker compose -f docker/bench-image/docker-compose.yml logs -f bench
+#
+# Then restore a database (see docker/bench-image/README.md) and open
+# http://demo.localhost:8002.
+#
+# The bench image is PRIVATE: `docker login ghcr.io` first.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: emr-bench
+
+services:
+  bench:
+    image: ${BENCH_IMAGE:-ghcr.io/amir8848digital/emr-bench:latest}
+    ports:
+      - "${FRAPPE_PORT:-8002}:8002"          # desk + REST API
+      - "${FRAPPE_SOCKETIO_PORT:-9002}:9002" # realtime
+    environment:
+      FRAPPE_SITE: ${FRAPPE_SITE:-demo.localhost}
+      FRAPPE_DB_HOST: mariadb
+      FRAPPE_DB_PORT: "3306"
+    volumes:
+      # The working bench. This MUST stay a named volume: Docker seeds an empty
+      # named volume from the image's /workspace/bench, so a fresh one arrives
+      # with all nine apps and the virtualenv already in place. A bind mount
+      # here would shadow the bench with an empty directory instead.
+      # Your edits, new sites and uploaded files then persist in this volume.
+      - bench:/workspace/bench
+      # Drop a database dump or a site directory here to hand it to the bench.
+      - ./handover:/handover:ro
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      bench-redis-cache:
+        condition: service_started
+      bench-redis-queue:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      emr-bench:
+        aliases:
+          # Frappe serves per Host header and 404s an unknown one, so other
+          # containers must reach it by the same name the browser uses.
+          - demo.localhost
+
+  mariadb:
+    image: mariadb:11
+    ports:
+      - "${MARIADB_HOST_PORT:-3308}:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?set this in .env}
+      MARIADB_DATABASE: ${FRAPPE_DB_NAME:-demo_site}
+      MARIADB_USER: ${FRAPPE_DB_USER:-demo_site}
+      MARIADB_PASSWORD: ${FRAPPE_DB_PASSWORD:?set this in .env}
+    command:
+      # Frappe's required server settings
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --innodb-file-per-table=1
+      - --innodb-buffer-pool-size=1G
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      # Anything here is imported ONCE, on an empty data volume, in filename
+      # order — the quickest way to load a dump you were given.
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      # importing a multi-GB dump on first boot takes a while
+      start_period: 15m
+    restart: unless-stopped
+    networks: [emr-bench]
+
+  bench-redis-cache:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no",
+              "--maxmemory", "1gb", "--maxmemory-policy", "allkeys-lru"]
+    restart: unless-stopped
+    networks: [emr-bench]
+
+  bench-redis-queue:
+    image: redis:7-alpine
+    # queued jobs should survive a restart
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-queue-data:/data
+    restart: unless-stopped
+    networks: [emr-bench]
+
+networks:
+  emr-bench:
+    driver: bridge
+
+volumes:
+  bench:
+  mariadb-data:
+  redis-queue-data:

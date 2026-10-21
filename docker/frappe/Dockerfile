@@ -10,7 +10,11 @@
 # requires-python = ">=3.14,<3.15".
 FROM python:3.14-bookworm
 
-ARG NODE_MAJOR=22
+# Frappe v16 requires Node >=24 (apps/frappe/package.json "engines"). On 22,
+# `bench watch` exits immediately with an incompatible-engine error and bench
+# start then tears down every other process with it. This is the same reason
+# the host Procfile prefixes PATH with nvm's v24.
+ARG NODE_MAJOR=24
 
 # Frappe's build/runtime dependencies:
 #   libmariadb-dev + default-mysql-client -> mysqlclient, `bench --site ... mariadb`
@@ -31,7 +35,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       tini \
     && rm -rf /var/lib/apt/lists/*
 
-# Node is needed for `bench socketio` (the realtime server) and `bench watch`.
+# Node is needed for `bench socketio` (the realtime server) and `bench watch`,
+# which also builds frontend assets.
 RUN curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \

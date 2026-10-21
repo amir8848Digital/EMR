@@ -36,6 +36,14 @@ frappe-bench/
 docker/db-init/*
 !docker/db-init/README.md
 !docker/db-init/.gitkeep
+
+# Same for the standalone bench image: db-init takes the dump, and handover/ is
+# where a site directory lands — and a site_config.json holds the db password
+# and the encryption_key in clear text.
+docker/bench-image/db-init/*
+!docker/bench-image/db-init/.gitkeep
+docker/bench-image/handover/*
+!docker/bench-image/handover/.gitkeep
 **/private/backups/
 *.sql
 *.sql.gz
