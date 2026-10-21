@@ -10,14 +10,60 @@ Node setup.
 > and `emr_sso`, which is licensed `Proprietary`. It must only ever live in a
 > **private** registry. Do not make the GHCR package public.
 
+Published as **`ghcr.io/amir8848digital/emr-bench:latest`** (also tagged
+`frappe-v16-20261021`). The package is **private**: 1.35GB compressed to
+download, ~6.3GB on disk once unpacked.
+
+## Granting a developer access
+
+This is the step that trips people up — a private package with no grant fails
+with `denied` or a puzzling `manifest unknown`, which looks like a bad tag
+rather than a permissions problem.
+
+On the [package settings page](https://github.com/users/amir8848Digital/packages/container/emr-bench/settings),
+do one of:
+
+- **Manage access** → add each developer, or
+- **Link repository** → `amir8848Digital/EMR`, so anyone with access to that
+  repo can pull
+
+Each developer then needs **their own** GitHub token with `read:packages` —
+never share yours:
+
+```bash
+echo THEIR_GITHUB_PAT | docker login ghcr.io -u THEIR_USERNAME --password-stdin
+```
+
 ## For a developer
 
 ```bash
-docker login ghcr.io                                   # private package
+git clone --recurse-submodules https://github.com/amir8848Digital/EMR.git
+cd EMR
 cp docker/bench-image/.env.example docker/bench-image/.env   # fill in passwords
-docker compose -f docker/bench-image/docker-compose.yml up -d
+docker compose -f docker/bench-image/docker-compose.yml up -d   # pulls the image
 docker compose -f docker/bench-image/docker-compose.yml logs -f bench
 ```
+
+### Sharing without GitHub
+
+```bash
+docker save ghcr.io/amir8848digital/emr-bench:latest | gzip -1 > emr-bench.tar.gz
+```
+
+They run `docker load < emr-bench.tar.gz` and set `BENCH_IMAGE` in their `.env`.
+No registry or login involved — but the file contains proprietary source, so
+treat it exactly like the code.
+
+### What else you must hand over
+
+The image carries no database and no site directory, so each developer also
+needs, over a private channel:
+
+| Item | Why |
+|---|---|
+| the `demo_site` dump | the image ships no data |
+| the matching **`encryption_key`** | without it Frappe cannot decrypt stored passwords — API keys, email accounts and integrations all break |
+| `site_config.json`, or the db user and password | so the bench can connect |
 
 Then load a database (next section) and open **http://demo.localhost:8002**.
 Use `demo.localhost`, not `localhost` — Frappe serves per `Host` header.
