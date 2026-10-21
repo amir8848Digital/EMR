@@ -1,0 +1,395 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# The whole EMR SSO stack — one `docker compose up -d`.
+#
+#   docker compose up -d          start everything
+#   docker compose logs -f crm    follow one app
+#   docker compose down           stop (volumes, and your data, survive)
+#
+# Host ports are pinned, NOT arbitrary. Every one of them is already registered
+# in AuthService as a client redirect / back-channel URL, so changing a port here
+# silently breaks single sign-on for that app. See DOCKER.md.
+#
+# Source is bind-mounted and each app's existing node_modules is reused as-is —
+# nothing reinstalls over a working checkout. That is a requirement, not a
+# shortcut: DC's tree holds @8848digital packages that cannot be refetched
+# without a GitHub Packages token, and the Frappe apps cannot be cloned at all.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: emr-stack
+
+# ── reusable fragments ──────────────────────────────────────────────────────
+x-node: &node
+  build:
+    context: ./docker/node-dev
+  # run as the host user so .next/ caches and logs written into the bind mount
+  # stay owned by you instead of root
+  user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+  restart: unless-stopped
+  networks: [emr]
+
+# Reaching back out to the host. AuthService's registered back-channel URLs point
+# at host.localhost / demo.localhost, and the catalog apps' own .env files use
+# localhost URLs; mapping those names to the host gateway means the registered
+# client records keep working untouched.
+x-host-aliases: &host-aliases
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+    - "host.localhost:host-gateway"
+    # dc.localhost is left pointing at the host so these containers behave exactly
+    # like the host does. Nothing serves it today (the dc.localhost bench was
+    # rolled back; demo.localhost is the Frappe backend), and the catalog .env
+    # files still carry a stale FRAPPE_BASE_URL=http://dc.localhost:8001. Mapping
+    # it means that misconfiguration surfaces as a refused connection, the same
+    # as on the host, rather than as a confusing DNS failure.
+    - "dc.localhost:host-gateway"
+
+services:
+
+  # ═══ data stores ══════════════════════════════════════════════════════════
+
+  mariadb:
+    image: mariadb:11
+    # A copy, not your host MariaDB: the host instance on :3306 is left alone.
+    # Published on 3308 because 3306 (host mariadb) and 3307 (mariadb-emr6122)
+    # are both taken on this machine.
+    ports:
+      - "${MARIADB_HOST_PORT:-3308}:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${FRAPPE_DB_NAME:-demo_site}
+      MARIADB_USER: ${FRAPPE_DB_USER:-demo_site}
+      MARIADB_PASSWORD: ${FRAPPE_DB_PASSWORD}
+    command:
+      # Frappe's required server settings. utf8mb4_unicode_ci matches what the
+      # Frappe tables already use; the catalog tables are utf8mb4_general_ci, so
+      # cross-table joins on user codes still need an explicit COLLATE.
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      # Frappe creates a lot of tables per site (612 in demo_site today).
+      - --innodb-file-per-table=1
+      - --innodb-buffer-pool-size=1G
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      # Anything in here runs ONCE, on an empty data volume, in filename order.
+      # The demo_site dump the repo owner shares goes here — see DOCKER.md
+      # "Load the database".
+      - ./docker/db-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "127.0.0.1", "--silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      # a 4.7GB restore on first boot takes a while; don't fail it early
+      start_period: 15m
+    restart: unless-stopped
+    networks: [emr]
+
+  frappe-redis-cache:
+    image: redis:7-alpine
+    # cache only: losing it costs a cold cache, nothing more
+    command: ["redis-server", "--save", "", "--appendonly", "no",
+              "--maxmemory", "1gb", "--maxmemory-policy", "allkeys-lru"]
+    restart: unless-stopped
+    networks: [emr]
+
+  frappe-redis-queue:
+    image: redis:7-alpine
+    # queued background jobs must survive a restart, so this one persists
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - frappe-queue-data:/data
+    restart: unless-stopped
+    networks: [emr]
+
+  # ═══ Frappe bench (desk, CRM + PD backend) ════════════════════════════════
+
+  frappe:
+    build:
+      context: ./docker/frappe
+      args:
+        # bake the host's uid/gid in, so bench's writes into the bind-mounted
+        # apps/ and sites/ stay owned by you
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+    ports:
+      - "${FRAPPE_PORT:-8002}:8002"   # desk + REST API
+      - "${FRAPPE_SOCKETIO_PORT:-9002}:9002"   # realtime
+    environment:
+      FRAPPE_DB_HOST: mariadb
+      FRAPPE_DB_PORT: "3306"
+      FRAPPE_DB_NAME: ${FRAPPE_DB_NAME:-demo_site}
+      FRAPPE_SITE: ${FRAPPE_SITE:-demo.localhost}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+    volumes:
+      # the bench's source and sites, straight from disk
+      - ./demo-bench/apps:/workspace/bench/apps
+      - ./demo-bench/sites:/workspace/bench/sites
+      - ./demo-bench/logs:/workspace/bench/logs
+      # Container-only overlays. Both are single files layered over the mounts
+      # above so the HOST bench keeps its own settings and still runs unchanged:
+      #   - config points at the mariadb/redis services instead of 127.0.0.1
+      #   - Procfile drops the redis lines (redis is its own service here) and
+      #     the hardcoded nvm PATH
+      - ./docker/frappe/common_site_config.json:/workspace/bench/sites/common_site_config.json
+      - ./docker/frappe/Procfile:/workspace/bench/Procfile:ro
+      # env/ must NOT be shared with the host: that venv has host absolute paths
+      # and a host-built interpreter in it. The container builds its own here.
+      - frappe-env:/workspace/bench/env
+    command: ["bench", "start"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      frappe-redis-cache:
+        condition: service_started
+      frappe-redis-queue:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      emr:
+        aliases:
+          # lets other containers use the same hostname the browser does, which
+          # matters because Frappe serves per Host header and 404s an unknown one
+          - demo.localhost
+
+  # ═══ AuthService (SSO broker) ═════════════════════════════════════════════
+
+  auth-redis:
+    image: redis:7-alpine
+    # AOF: shared SSO sessions, tickets and used-token ids must survive a restart,
+    # or every user is signed out and replayed tokens could pass again.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - auth-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks: [emr]
+
+  auth-service:
+    # the only app with a real production Dockerfile — all its deps are public
+    build:
+      context: ./Aerem_Auth_Service
+    ports:
+      - "${AUTH_PORT:-4000}:4000"
+    env_file:
+      - ./Aerem_Auth_Service/.env
+    environment:
+      PORT: "4000"
+      REDIS_URL: redis://auth-redis:6379
+      # plain http://localhost in dev, so session cookies must not be Secure
+      NODE_ENV: development
+    volumes:
+      # clients.db (registered clients + secrets) and the signing keypair
+      - auth-data:/app/data
+    extra_hosts:
+      # Back-channel logout calls the URLs stored in clients.db, which point at
+      # host.localhost:<port> and demo.localhost:8002. Routing those to the host
+      # gateway reaches each app's published port, so nothing needs re-registering.
+      - "host.docker.internal:host-gateway"
+      - "host.localhost:host-gateway"
+      - "demo.localhost:host-gateway"
+      - "dc.localhost:host-gateway"
+    depends_on:
+      auth-redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [emr]
+
+  # ═══ new EMR (emr_node API + Basecamp frontend) ═══════════════════════════
+
+  emr-backend:
+    <<: [*node, *host-aliases]
+    working_dir: /app
+    ports:
+      - "${EMR_BACKEND_PORT:-8000}:8000"
+    env_file:
+      - ./new--emr/.env
+    environment:
+      PORT: "8000"
+      # DB_HOST stays whatever .env says: this one talks to an external MSSQL
+      # server, not to the mariadb service.
+      AUTH_SERVICE_URL: http://auth-service:4000    # container -> container
+      AUTH_SERVICE_PUBLIC_URL: http://localhost:${AUTH_PORT:-4000}  # browser-facing
+    volumes:
+      - ./new--emr/emr_node:/app
+    command: ["npm", "run", "dev"]
+    depends_on: [auth-service]
+
+  emr-frontend:
+    <<: *node
+    working_dir: /app
+    ports:
+      - "${EMR_FRONTEND_PORT:-3001}:3001"
+    env_file:
+      - ./new--emr/.env
+    environment:
+      PORT: "3001"
+    volumes:
+      - ./new--emr/Basecamp_Frontend:/app
+    command: ["npm", "run", "dev"]
+    depends_on: [emr-backend]
+
+  # ═══ Frappe-backed frontends ══════════════════════════════════════════════
+
+  crm:
+    <<: [*node, *host-aliases]
+    working_dir: /app
+    ports:
+      - "${CRM_PORT:-3000}:3000"
+    volumes:
+      - ./CRM/crm-frontend:/app
+    command: ["npm", "run", "dev"]           # script pins --port 3000
+    depends_on: [frappe]
+
+  pd:
+    <<: [*node, *host-aliases]
+    working_dir: /app
+    ports:
+      - "${PD_PORT:-3003}:3003"
+    volumes:
+      - ./PD/Basecamp_Frontend:/app
+    command: ["npm", "run", "dev"]           # script pins --port 3003
+    depends_on: [frappe]
+
+  # ═══ Digital catalog ══════════════════════════════════════════════════════
+
+  dc-backend:
+    <<: [*node, *host-aliases]
+    working_dir: /app
+    ports:
+      - "${DC_BACKEND_PORT:-5001}:5001"
+    env_file:
+      - ./DC/EMR_Catalog_Backend/.env
+    environment:
+      PORT: "5001"
+      DB_SERVER: mariadb
+      DB_PORT: "3306"
+      AUTH_SERVICE_URL: http://auth-service:4000
+      AUTH_SERVICE_PUBLIC_URL: http://localhost:${AUTH_PORT:-4000}
+    volumes:
+      - ./DC/EMR_Catalog_Backend:/app
+    command: ["npm", "run", "dev"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+
+  dc-web:
+    # Node 22 + pnpm image: pnpm@11 refuses to run on Node 20.
+    build:
+      context: ./docker/node22-dev
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /app/apps/web
+    ports:
+      - "${DC_WEB_PORT:-3002}:3002"
+    volumes:
+      # the whole workspace, node_modules included — its pnpm symlinks are all
+      # relative and stay inside the tree, so they resolve fine in here
+      - ./DC/digital-catalog:/app
+    # next is invoked directly, NOT through pnpm, on purpose: pnpm v11 verifies
+    # the dependency tree before running a script and would want to purge and
+    # rebuild node_modules (the on-disk tree is `isolated`, .npmrc asks for
+    # `hoisted`). That purge is unrecoverable here — @8848digital/catalyst and
+    # offline-kit cannot be refetched without a GitHub Packages token.
+    # copy-sqlite-assets is the repo's own `predev` step.
+    command:
+      - sh
+      - -c
+      - "node scripts/copy-sqlite-assets.mjs && exec node_modules/.bin/next dev --turbopack --port 3002"
+    restart: unless-stopped
+    networks: [emr]
+    depends_on: [dc-backend]
+
+  # ═══ POS ══════════════════════════════════════════════════════════════════
+
+  pos-backend:
+    <<: [*node, *host-aliases]
+    working_dir: /app
+    ports:
+      - "${POS_BACKEND_PORT:-5003}:5003"
+    env_file:
+      - ./POS/EMR_Catalog_Backend/.env
+    environment:
+      PORT: "5003"
+      DB_SERVER: mariadb
+      DB_PORT: "3306"
+      AUTH_SERVICE_URL: http://auth-service:4000
+      AUTH_SERVICE_PUBLIC_URL: http://localhost:${AUTH_PORT:-4000}
+    volumes:
+      - ./POS/EMR_Catalog_Backend:/app
+    command: ["npm", "run", "dev"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+
+  pos-web:
+    <<: [*node, *host-aliases]
+    working_dir: /app
+    ports:
+      - "${POS_WEB_PORT:-3006}:3006"
+    volumes:
+      - ./POS/POS:/app
+    command: ["npm", "run", "dev"]           # script pins --port 3006
+    depends_on: [pos-backend]
+
+  # ═══ Workers Tab ══════════════════════════════════════════════════════════
+
+  wt-backend:
+    <<: [*node, *host-aliases]
+    working_dir: /app
+    ports:
+      - "${WT_BACKEND_PORT:-5091}:5091"
+    env_file:
+      - ./WT/EMR_Catalog_Backend/.env
+    environment:
+      PORT: "5091"
+      DB_SERVER: mariadb
+      DB_PORT: "3306"
+    volumes:
+      - ./WT/EMR_Catalog_Backend:/app
+    command: ["npm", "run", "dev"]
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  wt-web:
+    <<: [*node, *host-aliases]
+    working_dir: /app
+    ports:
+      - "${WT_WEB_PORT:-3004}:3004"
+    environment:
+      # WT's dev script passes no --port, so it would land on 3000 and collide
+      # with CRM. Next reads PORT when no flag is given.
+      PORT: "3004"
+    volumes:
+      - ./WT/Workers_tab_web:/app
+    command: ["npm", "run", "dev"]
+    depends_on: [wt-backend]
+
+networks:
+  emr:
+    driver: bridge
+
+volumes:
+  mariadb-data:
+  frappe-queue-data:
+  frappe-env:
+
+  # These two keep the names the old Aerem_Auth_Service/docker-compose.yml used,
+  # so this stack adopts the data that is already there instead of starting empty.
+  # That matters: auth-data holds clients.db — the six registered SSO clients and
+  # their secrets — plus the token signing keypair. A fresh volume would mint a new
+  # keypair and drop every client registration, which silently breaks SSO for all
+  # apps until each one is re-registered at /admin.
+  # On a machine that has neither volume, compose just creates them.
+  auth-data:
+    name: aerem_auth_service_auth-data
+  auth-redis-data:
+    name: aerem_auth_service_redis-data

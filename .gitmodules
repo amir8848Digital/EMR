@@ -1,0 +1,40 @@
+[submodule "Aerem_Auth_Service"]
+	path = Aerem_Auth_Service
+	url = https://github.com/8848digital/Aerem_Auth_Service.git
+	branch = sso-integration
+[submodule "CRM/crm-frontend"]
+	path = CRM/crm-frontend
+	url = https://github.com/8848digital/crm-frontend.git
+	branch = sso-integration
+[submodule "DC/digital-catalog"]
+	path = DC/digital-catalog
+	url = https://github.com/8848digital/digital-catalog.git
+	branch = sso-integration
+[submodule "DC/EMR_Catalog_Backend"]
+	path = DC/EMR_Catalog_Backend
+	url = https://github.com/8848digital/EMR_Catalog_Backend.git
+	branch = dc_catalog_multidb
+[submodule "PD/Basecamp_Frontend"]
+	path = PD/Basecamp_Frontend
+	url = https://github.com/8848digital/Basecamp_Frontend.git
+	branch = sso-integration
+[submodule "POS/POS"]
+	path = POS/POS
+	url = https://github.com/8848digital/POS
+	branch = keemti-production
+[submodule "POS/EMR_Catalog_Backend"]
+	path = POS/EMR_Catalog_Backend
+	url = https://github.com/8848digital/EMR_Catalog_Backend.git
+	branch = merge/pos-into-multidb
+[submodule "WT/Workers_tab_web"]
+	path = WT/Workers_tab_web
+	url = https://github.com/8848digital/Workers_tab_web.git
+	branch = demo-luxury
+[submodule "WT/EMR_Catalog_Backend"]
+	path = WT/EMR_Catalog_Backend
+	url = https://github.com/8848digital/EMR_Catalog_Backend.git
+	branch = merge/workerstab-into-multidb
+[submodule "new--emr"]
+	path = new--emr
+	url = https://github.com/amir8848Digital/new--emr.git
+	branch = sso-integration

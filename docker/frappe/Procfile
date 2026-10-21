@@ -1,0 +1,12 @@
+# Container Procfile for `bench start`.
+#
+# Two differences from demo-bench/Procfile:
+#   - no redis_cache/redis_queue lines: redis runs as its own compose services,
+#     so bench must not spawn its own (the host Procfile's redis configs also
+#     hardcode host absolute paths for dir/pidfile/aclfile).
+#   - no nvm PATH prefix: node is on PATH in this image.
+web: bench serve --port 8002
+socketio: bench socketio
+watch: bench watch
+schedule: bench schedule
+worker: bench worker 1>> logs/worker.log 2>> logs/worker.error.log

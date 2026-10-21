@@ -1,0 +1,38 @@
+diff --git a/8848_frappe_core/utils.py b/8848_frappe_core/utils.py
+index bde8c80..d349051 100644
+--- a/8848_frappe_core/utils.py
++++ b/8848_frappe_core/utils.py
+@@ -154,19 +154,27 @@ def map_parameter_backed_text_fields_to_title(doctype, fields, list_data):
+ 
+ 
+ def get_total_count(doctype, filters, or_filters):
+-	# Query total count using frappe.get_list to handle custom filters, permissions, and COUNT aggregate efficiently.
+-	count_rows = frappe.get_list(
++	# Count over a subquery, mirroring frappe.desk.reportview.get_count. Keeps custom
++	# filters and permissions, and joins from link/child-table filters cannot inflate
++	# the count. Frappe v16 rejects SQL functions passed as plain strings in `fields`
++	# ("SQL functions are not allowed as strings in SELECT"), so the previous
++	# `count(distinct ...) as total_count` string no longer works.
++	from frappe.query_builder.functions import Count
++
++	partial_query = frappe.get_list(
+ 		doctype,
+ 		filters=filters,
+ 		or_filters=or_filters,
+-		fields=[f"count(distinct `tab{doctype}`.name) as total_count"],
++		fields=[f"`tab{doctype}`.name"],
++		distinct=True,
+ 		limit_page_length=0,
++		order_by=None,
++		run=False,
+ 	)
+ 
+-	if not count_rows:
+-		return 0
++	result = frappe.qb.from_(partial_query).select(Count("*")).run()
+ 
+-	return count_rows[0].get("total_count") or 0
++	return result[0][0] if result else 0
+ 
+ 
+ def update_link_titles_with_child_tables(doctype, doc_dict, fields=None):
