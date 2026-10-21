@@ -18,10 +18,17 @@ Full setup, troubleshooting and design notes: **[DOCKER.md](DOCKER.md)**.
 The apps are **git submodules**, so `--recurse-submodules` matters. This repo
 itself holds only the orchestration: the compose file, the images and the docs.
 
+`new--emr/` is the one plain directory in that list — its two apps are
+submodules of this repo directly, rather than going through the intermediate
+`amir8848Digital/new--emr` repo. Only `new--emr/.env.example` is tracked
+alongside them, because `docker-compose.yml` reads `new--emr/.env`; everything
+else that repo carried still lives there if you need it.
+
 | Path | App | Port |
 |---|---|---|
 | `Aerem_Auth_Service` | SSO broker | 4000 |
-| `new--emr` | new EMR (API + Basecamp frontend) | 8000 / 3001 |
+| `new--emr/emr_node` | new EMR API | 8000 |
+| `new--emr/Basecamp_Frontend` | new EMR frontend (Basecamp) | 3001 |
 | `CRM/crm-frontend` | CRM | 3000 |
 | `PD/Basecamp_Frontend` | Product Development | 3003 |
 | `DC/digital-catalog` + `DC/EMR_Catalog_Backend` | Digital catalog | 3002 / 5001 |

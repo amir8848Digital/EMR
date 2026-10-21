@@ -19,6 +19,21 @@
 # stray artifact, not real config
 POS/package-lock.json
 
+# ── new--emr/ ───────────────────────────────────────────────────────────────
+# This is a plain directory here, not a submodule. Its two apps are submodules
+# of THIS repo (see .gitmodules), so a clone gets them without the extra hop
+# through the old amir8848Digital/new--emr repo.
+#
+# Everything else that repo carried — its agent notes, its own compose files,
+# db-migration/, SQL dumps and assorted backup folders — is intentionally not
+# tracked here; it still lives in that repo if you need it. The one exception is
+# the env template, because docker-compose.yml reads new--emr/.env and a fresh
+# clone needs something to copy from.
+new--emr/*
+!new--emr/emr_node
+!new--emr/Basecamp_Frontend
+!new--emr/.env.example
+
 # ── Frappe benches ──────────────────────────────────────────────────────────
 # NOT in this repo, and demo-bench cannot be: it is not a git repo, its nine
 # apps have no `origin` (only `upstream`), and `emr_sso` has no remote at all

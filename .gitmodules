@@ -34,7 +34,11 @@
 	path = WT/EMR_Catalog_Backend
 	url = https://github.com/8848digital/EMR_Catalog_Backend.git
 	branch = merge/workerstab-into-multidb
-[submodule "new--emr"]
-	path = new--emr
-	url = https://github.com/amir8848Digital/new--emr.git
-	branch = sso-integration
+[submodule "emr_node"]
+	path = new--emr/emr_node
+	url = https://github.com/8848digital/emr_node.git
+	branch = ai_implementation
+[submodule "Basecamp_Frontend_NewEMR"]
+	path = new--emr/Basecamp_Frontend
+	url = https://github.com/8848digital/Basecamp_Frontend.git
+	branch = feat/sso-tab-sync-wvr
