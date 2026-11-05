@@ -33,7 +33,7 @@ else that repo carried still lives there if you need it.
 | `PD/Basecamp_Frontend` | Product Development | 3003 |
 | `DC/digital-catalog` + `DC/EMR_Catalog_Backend` | Digital catalog | 3002 / 5001 |
 | `POS/POS` + `POS/EMR_Catalog_Backend` | POS | 3006 / 5003 |
-| `WT/Workers_tab_web` + `WT/EMR_Catalog_Backend` | Workers Tab | 3004 / 5091 |
+| `WT/Workers_tab_web` + `POS/EMR_Catalog_Backend` | Workers Tab | 3004 / 5091 |
 
 Ports are **pinned**: each is registered in AuthService as that client's redirect
 and back-channel URL, so renumbering one breaks SSO for that app.

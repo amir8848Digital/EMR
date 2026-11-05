@@ -346,14 +346,17 @@ services:
     working_dir: /app
     ports:
       - "${WT_BACKEND_PORT:-5091}:5091"
+    # Workers Tab no longer has a backend checkout of its own: the
+    # merge/workerstab-into-multidb branch was folded into the consolidated
+    # multidb backend, so this service runs that same tree on WT's own port.
     env_file:
-      - ./WT/EMR_Catalog_Backend/.env
+      - ./POS/EMR_Catalog_Backend/.env
     environment:
       PORT: "5091"
       DB_SERVER: mariadb
       DB_PORT: "3306"
     volumes:
-      - ./WT/EMR_Catalog_Backend:/app
+      - ./POS/EMR_Catalog_Backend:/app
     command: ["npm", "run", "dev"]
     depends_on:
       mariadb:
